@@ -29,6 +29,7 @@ import play.api.libs.json.Json
 import play.api.libs.ws.{WSClient, WSResponse}
 import redis.RedisClient
 import scala.collection.mutable
+import scala.collection.immutable
 import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration._
 import talkyard.server.JsX.JsUser
@@ -91,13 +92,13 @@ object PubSub {
 
 class PubSubApi(private val actorRef: ActorRef) {
 
-  private val timeout = 10 seconds
+  private val timeout = 10.seconds
 
   SHOULD; PRIVACY // change from site id to publ site id [5UKFBQW2].
 
   def userSubscribed(siteId: SiteId, user: Participant, browserIdData: BrowserIdData,
-                     watchedPageIds: Set[PageId]) {
-    actorRef ! UserSubscribed(siteId, user, browserIdData, watchedPageIds)
+                     watchedPageIds: Set[PageId], usersWsActor: ActorRef) {
+    actorRef ! UserSubscribed(siteId, user, browserIdData, watchedPageIds, usersWsActor)
   }
 
   def unsubscribeUser(siteId: SiteId, user: Participant, browserIdData: BrowserIdData) {
@@ -128,8 +129,6 @@ class PubSubApi(private val actorRef: ActorRef) {
 
 class StrangerCounterApi(private val actorRef: ActorRef) {
 
-  private val timeout = 10 seconds
-
   def strangerSeen(siteId: SiteId, browserIdData: BrowserIdData) {
     actorRef ! StrangerSeen(siteId, browserIdData)
   }
@@ -142,7 +141,8 @@ private case class UserWatchesPages(
 private case class UserIsActive(
   siteId: SiteId, user: Participant, browserIdData: BrowserIdData)
 private case class UserSubscribed(
-  siteId: SiteId, user: Participant, browserIdData: BrowserIdData, watchedPageIds: Set[PageId])
+  siteId: SiteId, user: Participant, browserIdData: BrowserIdData, watchedPageIds: Set[PageId],
+  usersWsActor: ActorRef)
 private case class UnsubscribeUser(
   siteId: SiteId, user: Participant, browserIdData: BrowserIdData)
 private case object DeleteInactiveSubscriptions
@@ -151,7 +151,9 @@ private case class DebugGetSubscribers(siteId: SiteId)
 private case class StrangerSeen(siteId: SiteId, browserIdData: BrowserIdData)
 
 
-case class UserWhenPages(user: Participant, when: When, watchingPageIds: Set[PageId]) {
+// RENAME to WebSocketStuff?
+case class UserWhenPages(user: Participant, when: When, watchingPageIds: Set[PageId],
+    usersWsActor: ActorRef) {
   override def toString: String =
     o"""(@${user.anyUsername getOrElse "-"}:${user.id} at ${toIso8601T(when.toJavaDate)}
         watches: ${ watchingPageIds.mkString(",") })"""
@@ -217,11 +219,22 @@ class PubSubActor(val nginxHost: String, val globals: Globals) extends Actor {
     case UserIsActive(siteId, user, browserIdData) =>
       publishPresenceIfChanged(siteId, Some(user), Presence.Active)
       redisCacheForSite(siteId).markUserOnlineRemoveStranger(user.id, browserIdData)
-    case UserSubscribed(siteId, user, browserIdData, watchedPageIds) =>
+    case UserSubscribed(siteId, user, browserIdData, watchedPageIds, usersWsActor: ActorRef) =>
+      // If the user is subscribed already, delete the old WebSocket connection
+      // and use this new one instead. [ONEWSCON]
+      // (If the user is subscribed already — that indicates hen has Ty open in different
+      // browsers? Because each browser should need just one connection: the service
+      // worker's connection. — Keeping DoS attacks in mind, better allow just one
+      // connection per user, for now at least? )
+
+      // .... wip ....
+
       // Mark as subscribed, even if this has been done already, to bump it's timestamp.
-      val anyOldPageIds = addOrUpdateSubscriber(siteId, user, watchedPageIds)
+      val anyOldPageIds = addOrUpdateSubscriber(siteId, user, watchedPageIds, usersWsActor)
       updateWatcherIdsByPageId(siteId, user.id,
         oldPageIds = anyOldPageIds.getOrElse(Set.empty), watchedPageIds)
+      // delete any old ws
+
       // Don't mark user as online in Redis, and don't publish presence — because these
       // subscription requests are automatic. And, after app server restart, the app server's
       // caches are empty, so it'll seem as if the user just connected (even though hen might
@@ -229,6 +242,7 @@ class PubSubActor(val nginxHost: String, val globals: Globals) extends Actor {
     case UnsubscribeUser(siteId, user, browserIdData) =>
       val oldPageIds = removeSubscriber(siteId, user)
       updateWatcherIdsByPageId(siteId, user.id, oldPageIds = oldPageIds, Set.empty)
+      // delete any old ws
       // This, though, (in comparison to UserSubscribed) means the user logged out. So publ presence.
       redisCacheForSite(siteId).markUserOffline(user.id)
       publishPresenceAlways(siteId, Some(user), Presence.Away)
@@ -264,13 +278,14 @@ class PubSubActor(val nginxHost: String, val globals: Globals) extends Actor {
   }
 
 
-  private def addOrUpdateSubscriber(siteId: SiteId, user: Participant, watchedPageIds: Set[PageId])
+  private def addOrUpdateSubscriber(siteId: SiteId, user: Participant,
+        watchedPageIds: Set[PageId], usersWsActor: ActorRef)
         : Option[Set[PageId]] = {
     traceLog(siteId, s"Adding/updating subscriber ${prettyUser(user)} [TyDADUPSUBSC]")
     val subscribersById = subscribersByIdForSite(siteId)
     // Remove and reinsert, so inactive users will be the first ones found when iterating.
     val oldEntry = subscribersById.remove(user.id)
-    subscribersById.put(user.id, UserWhenPages(user, globals.now(), watchedPageIds))
+    subscribersById.put(user.id, UserWhenPages(user, globals.now(), watchedPageIds, usersWsActor))
     oldEntry.map(_.watchingPageIds)
   }
 
@@ -398,6 +413,20 @@ class PubSubActor(val nginxHost: String, val globals: Globals) extends Actor {
         json: JsValue) {
     SECURITY; SHOULD // extra check that I won't send messages about pages a user may not access.
     dieIf(siteId == NoSiteId, "EsE7UW7Y2", "Cannot send requests to NoSiteId")
+
+    val usersById: collection.Map[UserId, UserWhenPages] =
+      subscribersBySiteUserId.getOrElse(siteId, Map.empty)
+
+    toUserIds foreach { userId =>
+      usersById.get(userId) match {
+        case None =>
+        case Some(wsStuff) =>
+          null.asInstanceOf[ActorRef] ! Json.obj("type" -> tyype, "data" -> json).toString
+          wsStuff.usersWsActor ! Json.obj("type" -> tyype, "data" -> json).toString
+      }
+    }
+
+    // OLD:
     // Nchan supports publishing to at most 255 channels in one single request, so split in
     // groups of 255 channels. However, for now, split in groups of only 3 channels,
     // to find out if all this seems to work (255 channels -> would never be split, there
@@ -436,6 +465,7 @@ class PubSubActor(val nginxHost: String, val globals: Globals) extends Actor {
 
   /** BUG when user comes back and resubscribes, there might be some/many posts that hen didn't
     * get, whils being un-subscribed for inactivity.
+    * Ooops
     */
   private def deleteInactiveSubscriptions() {
     val now = globals.now()
