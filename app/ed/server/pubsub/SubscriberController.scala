@@ -17,6 +17,7 @@
 
 package ed.server.pubsub
 
+import akka.Done
 import akka.stream.OverflowStrategy
 import akka.stream.scaladsl.{Flow, SourceQueueWithComplete}
 import com.debiki.core._
@@ -56,6 +57,39 @@ class SubscriberController @Inject()(cc: ControllerComponents, tyCtx: EdContext)
     import tyCtx.security
     import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 
+    var anyOut: Option[SourceQueueWithComplete[JsValue]] = None
+
+    val foreachSink = Sink.foreach[JsValue](v => {
+      println(s"Got: $v")
+      anyOut.foreach(_.offer(Json.obj("messageEchoed" -> v)))
+    })
+
+    //val inSink: Sink[JsValue, _] = Flow[JsValue].alsoTo(onCompleteSink).to(foreachSink)
+    val inSink: Sink[JsValue, _] = foreachSink
+
+    val outSource: Source[JsValue, SourceQueueWithComplete[JsValue]] = Source
+      .queue[JsValue](bufferSize = 50, OverflowStrategy.fail)
+
+    Future.successful(Right(
+      Flow.fromSinkAndSourceMat(inSink,  outSource) {
+            (_, outboundMat: SourceQueueWithComplete[JsValue]) =>
+        outboundMat.offer(JsString("zorro"))
+        anyOut = Some(outboundMat)
+        //browserConnections ::= outboundMat.offer
+        //NotUsed
+      }
+        // https://stackoverflow.com/a/54137778/694469
+        .watchTermination() { (_, doneFuture: Future[Done]) =>
+          doneFuture onComplete {
+            case Success(_) =>
+              println("WebSocket client disconnected")
+            case Failure(throwable) =>
+              println(s"WebSocket client disconnection failure: ${throwable.getMessage}")
+          }
+        }
+        (tyCtx.globals.actorSystem, tyCtx.akkaStreamMaterializer)))
+
+
     // !!!
     //  https://stackoverflow.com/questions/30964824/how-to-create-a-source-that-can-receive-elements-later-via-a-method-call
     // How to create a Source that can receive elements later via a method call?
@@ -79,210 +113,209 @@ class SubscriberController @Inject()(cc: ControllerComponents, tyCtx: EdContext)
     // My Q:
     //  https://stackoverflow.com/questions/61337516/how-use-play-framework-2-8-websocket-with-sink-and-source
 
-    val onCompleteSink = Sink.onComplete(okOrFail =>
-      println(s"WS connection gone, ok: ${okOrFail.isSuccess}"))
+    /// val onCompleteSink = Sink.onComplete(okOrFail =>
+    ///   println(s"WS connection gone, ok: ${okOrFail.isSuccess}"))
 
-    //val inSink2: Sink[JsValue, _] = Sink.combine(foreachSink, onCompleteSink)(strategy = ???)
-      // strategy is of type:  Int => Graph[UniformFanOutShape[T, U], NotUsed]
-      // what does that mean? I suppose I'll try 'alsoTo' instead.
+    /// //val inSink2: Sink[JsValue, _] = Sink.combine(foreachSink, onCompleteSink)(strategy = ???)
+    ///   // strategy is of type:  Int => Graph[UniformFanOutShape[T, U], NotUsed]
+    ///   // what does that mean? I suppose I'll try 'alsoTo' instead.
 
-    // Play 2.8 docs w toy example:  https://www.playframework.com/documentation/2.8.x/ScalaWebSockets
+    /// // Play 2.8 docs w toy example:  https://www.playframework.com/documentation/2.8.x/ScalaWebSockets
 
-    val outSource: Source[JsValue, SourceQueueWithComplete[JsValue]] = Source
-      .queue[JsValue](bufferSize = 50, OverflowStrategy.fail)
+    /// //val outSource: Source[JsValue, SourceQueueWithComplete[JsValue]] = Source
+    ///   //.queue[JsValue](bufferSize = 50, OverflowStrategy.fail)
 
-    val queue2222: SourceQueueWithComplete[JsValue] = Source
-      .queue[JsValue](bufferSize = 1234, OverflowStrategy.backpressure)
-      //.throttle(elementsToProcess = 1334, 3.second)
-      //.map(x => x * x)
-      .toMat(Sink.foreach(x => println(s"completed $x")))(Keep.left)
-      .run()(???)
-      // No?
-      //  https://github.com/playframework/play-samples/tree/2.8.x/play-scala-chatroom-example/
+    /// val queue2222: SourceQueueWithComplete[JsValue] = Source
+    ///   .queue[JsValue](bufferSize = 1234, OverflowStrategy.backpressure)
+    ///   //.throttle(elementsToProcess = 1334, 3.second)
+    ///   //.map(x => x * x)
+    ///   .toMat(Sink.foreach(x => println(s"completed $x")))(Keep.left)
+    ///   .run()(???)
+    ///   // No?
+    ///   //  https://github.com/playframework/play-samples/tree/2.8.x/play-scala-chatroom-example/
 
-    // what
-    //   Access to websocket server materialized value #1167
-    // https://github.com/akka/akka-http/issues/1167
+    /// // what
+    /// //   Access to websocket server materialized value #1167
+    /// // https://github.com/akka/akka-http/issues/1167
 
-    // Unresolved:
-    //  " Graph materialized value of websocket upgrade "
-    //  https://groups.google.com/forum/#!topic/akka-user/p4HDrgmu6fo
+    /// // Unresolved:
+    /// //  " Graph materialized value of websocket upgrade "
+    /// //  https://groups.google.com/forum/#!topic/akka-user/p4HDrgmu6fo
 
-    // So it's undouented:
-    //  https://github.com/akka/akka/issues/28794
-    //  "Docs: describe how to extract materialized values when `run()` is called elsewhere #28794"
-
-
-    queue2222.offer(???)
-
-    val foreachSink = Sink.foreach[JsValue](v => {
-      //outSource.run()(tyCtx.akkaStreamMaterializer)
-      //outSource
-      println(v)
-    })
-
-    //val inSink: Sink[JsValue, _] = Flow[JsValue].alsoTo(onCompleteSink).to(foreachSink)
-    val inSink: Sink[JsValue, _] = foreachSink
-      //.throttle(elementsToProcess, 3.second)
-      //.map(x => x * x)
-      //.toMat(Sink.foreach(x => println(s"completed $x")))(Keep.left)
-      //.run()
-
-    // I cannot figure out how to send to the queue?  It has no offer() method
-    // unless I  run()  it
-    // but I think I shouldn't do that — Play or Akka will start it themselves?
+    /// // So it's undouented:
+    /// //  https://github.com/akka/akka/issues/28794
+    /// //  "Docs: describe how to extract materialized values when `run()` is called elsewhere #28794"
 
 
-    /*
-    val queue: Source = Source
-      .queue[Int](bufferSize = 100, akka.stream.OverflowStrategy.backpressure)
-      // .throttle(elementsToProcess, 3.second)
-      //.map(x => x * x)
-      .toMat(Sink.foreach { x =>
-        println(s"completed $x")
-    })(Keep.left)
-      // .run()(tyCtx.akkaStreamMaterializer)
-    */
+    /// queue2222.offer(???)
 
-    Future.successful(Right(
-      Flow.fromSinkAndSourceMat(inSink,  outSource)((_, outboundMat) => {
-        outboundMat.offer(JsString("zorro"))
-          //browserConnections ::= outboundMat.offer
-          //NotUsed
-        })
-        .watchTermination() { (_, fut) =>    // https://stackoverflow.com/a/54137778/694469
-          fut onComplete {
-            case Success(_) =>
-              println("Client disconnected")
-            case Failure(t) =>
-              println(s"Disconnection failure: ${t.getMessage}")
-          }
-        }
-      /*/akka.stream.ActorFlo.actorRef { out: akka.actor.ActorRef =>
-        val queue = Source
-          .queue[Int](bufferSize = 100, akka.stream.OverflowStrategy.backpressure)
-          // .throttle(elementsToProcess, 3.second)
-          //.map(x => x * x)
-          .toMat(Sink.foreach { x =>
-            println(s"completed $x")
-            out ! x
-          })(Keep.left)
-          .run()(tyCtx.akkaStreamMaterializer)
-          */
-    (tyCtx.globals.actorSystem, tyCtx.akkaStreamMaterializer)
+    /// val foreachSink = Sink.foreach[JsValue](v => {
+    ///   //outSource.run()(tyCtx.akkaStreamMaterializer)
+    ///   //outSource
+    ///   println(v)
+    /// })
 
-    ))
+    /// //val inSink: Sink[JsValue, _] = Flow[JsValue].alsoTo(onCompleteSink).to(foreachSink)
+    /// val inSink: Sink[JsValue, _] = foreachSink
+    ///   //.throttle(elementsToProcess, 3.second)
+    ///   //.map(x => x * x)
+    ///   //.toMat(Sink.foreach(x => println(s"completed $x")))(Keep.left)
+    ///   //.run()
+
+    /// // I cannot figure out how to send to the queue?  It has no offer() method
+    /// // unless I  run()  it
+    /// // but I think I shouldn't do that — Play or Akka will start it themselves?
+
+
+    /// /*
+    /// val queue: Source = Source
+    ///   .queue[Int](bufferSize = 100, akka.stream.OverflowStrategy.backpressure)
+    ///   // .throttle(elementsToProcess, 3.second)
+    ///   //.map(x => x * x)
+    ///   .toMat(Sink.foreach { x =>
+    ///     println(s"completed $x")
+    /// })(Keep.left)
+    ///   // .run()(tyCtx.akkaStreamMaterializer)
+    /// */
+
+    /// Future.successful(Right(
+    ///   Flow.fromSinkAndSourceMat(inSink,  outSource)((_, outboundMat) => {
+    ///       outboundMat.offer(JsString("zorro"))
+    ///       //browserConnections ::= outboundMat.offer
+    ///       //NotUsed
+    ///     })
+    ///     .watchTermination() { (_, fut) =>    // https://stackoverflow.com/a/54137778/694469
+    ///       fut onComplete {
+    ///         case Success(_) =>
+    ///           println("WebSocket client disconnected")
+    ///         case Failure(throwable) =>
+    ///           println(s"WebSocket client disconnection failure: ${throwable.getMessage}")
+    ///       }
+    ///     }
+    ///   /*/akka.stream.ActorFlo.actorRef { out: akka.actor.ActorRef =>
+    ///     val queue = Source
+    ///       .queue[Int](bufferSize = 100, akka.stream.OverflowStrategy.backpressure)
+    ///       // .throttle(elementsToProcess, 3.second)
+    ///       //.map(x => x * x)
+    ///       .toMat(Sink.foreach { x =>
+    ///         println(s"completed $x")
+    ///         out ! x
+    ///       })(Keep.left)
+    ///       .run()(tyCtx.akkaStreamMaterializer)
+    ///       */
+    /// (tyCtx.globals.actorSystem, tyCtx.akkaStreamMaterializer)))
 /*
 
-    // A bit dupl code — the same as for normal HTTP requests. [WSHTTPREQ]
-    val site = globals.lookupSiteOrThrow(request)
-    val dao = globals.siteDao(site.id)
-    val expireIdleAfterMins = dao.getWholeSiteSettings().expireIdleAfterMins
+    /// // A bit dupl code — the same as for normal HTTP requests. [WSHTTPREQ]
+    /// val site = globals.lookupSiteOrThrow(request)
+    /// val dao = globals.siteDao(site.id)
+    /// val expireIdleAfterMins = dao.getWholeSiteSettings().expireIdleAfterMins
 
-    // Eh, hmm, this won't work — there's no xsrf token header.
-    // Use the WebSocket's "protocol" thing, for xsrf token?
-    val (actualSidStatus, xsrfOk, newCookies) =
-      security.checkSidAndXsrfToken(   // throws things — want that?
-        request, anyRequestBody = None, siteId = site.id,
-              expireIdleAfterMins = expireIdleAfterMins, maySetCookies = false)
+    /// // Eh, hmm, this won't work — there's no xsrf token header.
+    /// // Use the WebSocket's "protocol" thing, for xsrf token?
+    /// val (actualSidStatus, xsrfOk, newCookies) =
+    ///   security.checkSidAndXsrfToken(   // throws things — want that?
+    ///     request, anyRequestBody = None, siteId = site.id,
+    ///           expireIdleAfterMins = expireIdleAfterMins, maySetCookies = false)
 
-    // """the Origin header in the request must be checked against the server’s origin,
-    // and manual authentication (including CSRF tokens) should be implemented.
-    // If a WebSocket request does not pass the security checks, then
-    // acceptOrResult should reject the request by returning a Forbidden result
-    //
-    // see: https://github.com/playframework/play-samples/blob/75fcbffbb19240b818707127ca7559962368b8d1/play-scala-websocket-example/app/controllers/HomeController.scala#L81
-    // — but it's buggy.
+    /// // """the Origin header in the request must be checked against the server’s origin,
+    /// // and manual authentication (including CSRF tokens) should be implemented.
+    /// // If a WebSocket request does not pass the security checks, then
+    /// // acceptOrResult should reject the request by returning a Forbidden result
+    /// //
+    /// // see: https://github.com/playframework/play-samples/blob/75fcbffbb19240b818707127ca7559962368b8d1/play-scala-websocket-example/app/controllers/HomeController.scala#L81
+    /// // — but it's buggy.
 
-    val (mendedSidStatus, deleteSidCookie) =
-      if (actualSidStatus.canUse) (actualSidStatus, false)
-      else (SidAbsent, true)
+    /// val (mendedSidStatus, deleteSidCookie) =
+    ///   if (actualSidStatus.canUse) (actualSidStatus, false)
+    ///   else (SidAbsent, true)
 
-    val anyBrowserId = security.getAnyBrowserId(request)
-    if (anyBrowserId.isEmpty)
-      return Future.successful(Left(
-          ForbiddenResult("TyEWS0BRID", "No browser id")))
-
-
-    dao.perhapsBlockRequest(request, mendedSidStatus, anyBrowserId)
-    val anyRequester: Option[Participant] = dao.getUserBySessionId(mendedSidStatus)
-
-    val requesterMaybeSuspended: Participant = anyRequester getOrElse {
-      return Future.successful(Left(
-        ForbiddenResult("TyEWS0USR", "Not logged in")))
-    }
-
-    if (requesterMaybeSuspended.isDeleted)
-      return Future.successful(Left(
-        ForbiddenResult("TyEWSUSRDLD", "User account deleted")
-          .discardingCookies(security.DiscardingSessionCookie)))  // + discard browser id co too
-
-    val isSuspended = requesterMaybeSuspended.isSuspendedAt(new java.util.Date)
-    if (isSuspended)
-      return Future.successful(Left(
-        ForbiddenResult("TyESUSPENDED_", "Your account has been suspended")
-          .discardingCookies(security.DiscardingSessionCookie)))
-
-    val requester = requesterMaybeSuspended
-
-    // A bit dupl code, see DebikiRequest [WSHTTPREQ]
-    val ip: IpAddress = security.realOrFakeIpOf(request)
-    val browserIdData = BrowserIdData(ip = ip, idCookie = anyBrowserId.map(_.cookieValue),
-      fingerprint = 0) // skip for now
+    /// val anyBrowserId = security.getAnyBrowserId(request)
+    /// if (anyBrowserId.isEmpty)
+    ///   return Future.successful(Left(
+    ///       ForbiddenResult("TyEWS0BRID", "No browser id")))
 
 
-    // Hi Play Fmw people,
-    // When using Sink and Source, how do I know when a WebSocket connection has
-    // closed? (e.g. by the client) —  And how do I close a connection?
-    // From the docs:
-    // Log events to the console
-    val in = akka.stream.scaladsl.Sink.foreach[String](println)
+    /// dao.perhapsBlockRequest(request, mendedSidStatus, anyBrowserId)
+    /// val anyRequester: Option[Participant] = dao.getUserBySessionId(mendedSidStatus)
 
-    // Send a single 'Hello!' message and then leave the socket open
-    val out = akka.stream.scaladsl.Source.single("Hello!")
-      .concat(akka.stream.scaladsl.Source.maybe)
+    /// val requesterMaybeSuspended: Participant = anyRequester getOrElse {
+    ///   return Future.successful(Left(
+    ///     ForbiddenResult("TyEWS0USR", "Not logged in")))
+    /// }
 
-    // Leaves me wondering how to close the 'in' and 'out', and how I can know
-    // if the client maybe closed them already?
-    // Actually I didn't this far find out how to send messages to the 'out'
-    // — how do I do that? Looking at the Source docs, I see only
-    // methods like  Source.single  or Source.repeat  or  Source.failed,
-    // all of which seem off-topic for my use case — I didn't find anything
-    // like a function I can call whenever there's a new WebSocket message
-    // to send to the browser?
-    // How do I send a message to 'out'? (so it gets WebSocket-sent to the browser)
+    /// if (requesterMaybeSuspended.isDeleted)
+    ///   return Future.successful(Left(
+    ///     ForbiddenResult("TyEWSUSRDLD", "User account deleted")
+    ///       .discardingCookies(security.DiscardingSessionCookie)))  // + discard browser id co too
 
-    // How do I send messages to a WebSocket actor I've created?
-    // Below, I first have an Actor, and then I have a "Prop".
-    // But how do I send messages to any of those?
-    // Since one doesn't send messages directly to an Actor —
-    // one sends the messages to an ActorRef instead.
-    // Maybe what I'm wondering, is, if I have a Prop and an Actor,
-    // how do I get an ActorRef?
-    //
-    // There's this function:
-    //
-    //    actorSystem.actorOf(theProps, name)
-    //
-    // but the docs says this creates a *new* actor. However I have one actor
-    // already, I don't need to create another one. What do I do?
-    //
+    /// val isSuspended = requesterMaybeSuspended.isSuspendedAt(new java.util.Date)
+    /// if (isSuspended)
+    ///   return Future.successful(Left(
+    ///     ForbiddenResult("TyESUSPENDED_", "Your account has been suspended")
+    ///       .discardingCookies(security.DiscardingSessionCookie)))
+
+    /// val requester = requesterMaybeSuspended
+
+    /// // A bit dupl code, see DebikiRequest [WSHTTPREQ]
+    /// val ip: IpAddress = security.realOrFakeIpOf(request)
+    /// val browserIdData = BrowserIdData(ip = ip, idCookie = anyBrowserId.map(_.cookieValue),
+    ///   fingerprint = 0) // skip for now
 
 
-    Flow.fromSinkAndSource(in, out)
+    /// // Hi Play Fmw people,
+    /// // When using Sink and Source, how do I know when a WebSocket connection has
+    /// // closed? (e.g. by the client) —  And how do I close a connection?
+    /// // From the docs:
+    /// // Log events to the console
+    /// val in = akka.stream.scaladsl.Sink.foreach[String](println)
 
-    // If the user is subscribed already, the PubSub actor will delete the old
-    // WebSocket connection and use this new one instead. [ONEWSCON]
-    Future.successful(Right(
-      p.libs.streams.ActorFlow.actorRef { out: akka.actor.ActorRef =>
-        val actor = new WebSocketActor(out, site.id, requester.id)
-        val requestersActorProps = akka.actor.Props(actor)
+    /// // Send a single 'Hello!' message and then leave the socket open
+    /// val out = akka.stream.scaladsl.Source.single("Hello!")
+    ///   .concat(akka.stream.scaladsl.Source.maybe)
 
-        requestersActorProps
-      }(tyCtx.globals.actorSystem, tyCtx.akkaStreamMaterializer)))
-      */
+    /// // Leaves me wondering how to close the 'in' and 'out', and how I can know
+    /// // if the client maybe closed them already?
+    /// // Actually I didn't this far find out how to send messages to the 'out'
+    /// // — how do I do that? Looking at the Source docs, I see only
+    /// // methods like  Source.single  or Source.repeat  or  Source.failed,
+    /// // all of which seem off-topic for my use case — I didn't find anything
+    /// // like a function I can call whenever there's a new WebSocket message
+    /// // to send to the browser?
+    /// // How do I send a message to 'out'? (so it gets WebSocket-sent to the browser)
+
+    /// // How do I send messages to a WebSocket actor I've created?
+    /// // Below, I first have an Actor, and then I have a "Prop".
+    /// // But how do I send messages to any of those?
+    /// // Since one doesn't send messages directly to an Actor —
+    /// // one sends the messages to an ActorRef instead.
+    /// // Maybe what I'm wondering, is, if I have a Prop and an Actor,
+    /// // how do I get an ActorRef?
+    /// //
+    /// // There's this function:
+    /// //
+    /// //    actorSystem.actorOf(theProps, name)
+    /// //
+    /// // but the docs says this creates a *new* actor. However I have one actor
+    /// // already, I don't need to create another one. What do I do?
+    /// //
+
+
+    /// Flow.fromSinkAndSource(in, out)
+
+    /// // If the user is subscribed already, the PubSub actor will delete the old
+    /// // WebSocket connection and use this new one instead. [ONEWSCON]
+    /// Future.successful(Right(
+    ///   p.libs.streams.ActorFlow.actorRef { out: akka.actor.ActorRef =>
+    ///     val actor = new WebSocketActor(out, site.id, requester.id)
+    ///     val requestersActorProps = akka.actor.Props(actor)
+
+    ///     requestersActorProps
+    ///   }(tyCtx.globals.actorSystem, tyCtx.akkaStreamMaterializer)))
+    ///   */
   }
 
+  /*
   private class WebSocketActor(
     webSocketOut: akka.actor.ActorRef,
     siteId: SiteId,
@@ -311,7 +344,7 @@ class SubscriberController @Inject()(cc: ControllerComponents, tyCtx: EdContext)
       case msg: String =>
         webSocketOut ! ("I received your message: " + msg)
     }
-  }
+  } */
 
   /*
   let ws = new WebSocket('ws://site-3.localhost/-/websockets');
