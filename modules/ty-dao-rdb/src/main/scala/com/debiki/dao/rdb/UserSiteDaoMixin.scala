@@ -530,16 +530,16 @@ trait UserSiteDaoMixin extends SiteTransaction {
   }
 
 
-  def nextIdentityId: IdentityId = {
-    val query = s"""
-      select max(id) max_id from identities3
-      where site_id = ?
-      """
-    runQueryFindExactlyOne(query, List(siteId.asAnyRef), rs => {
-      val maxId = rs.getInt("max_id")
-      (maxId + 1).toString
-    })
-  }
+  ///def nextIdentityId: IdentityId = {
+  ///  val query = s"""
+  ///    select max(id) max_id from identities3
+  ///    where site_id = ?
+  ///    """
+  ///  runQueryFindExactlyOne(query, List(siteId.asAnyRef), rs => {
+  ///    val maxId = rs.getInt("max_id")
+  ///    (maxId + 1).toString
+  ///  })
+  ///}
 
 
   def insertGuest(guest: Guest) {
@@ -621,44 +621,45 @@ trait UserSiteDaoMixin extends SiteTransaction {
   }
 
 
-  def deleteAllUsersIdentities(userId: UserId) {
-    TESTS_MISSING
-    val statement =
-      "delete from identities3 where user_id = ? and site_id = ?"
-    val values = List[AnyRef](userId.asAnyRef, siteId.asAnyRef)
-    runUpdate(statement, values)
-  }
+  // def deleteAllUsersIdentities(userId: UserId) {
+  //   TESTS_MISSING
+  //   val statement =
+  //     "delete from identities3 where user_id = ? and site_id = ?"
+  //   val values = List[AnyRef](userId.asAnyRef, siteId.asAnyRef)
+  //   runUpdate(statement, values)
+  // }
 
 
-  def insertIdentity(identity: Identity) {
-    identity match {
-      case x: IdentityOpenId =>
-        insertOpenIdIdentity(siteId, x)
-      case x: OpenAuthIdentity =>
-        insertOpenAuthIdentity(siteId, x)
-      case x =>
-        die("DwE8UYM0", s"Unknown identity type: ${classNameOf(x)}")
-    }
-  }
+  //def insertIdentity(identity: Identity) {
+  //  identity match {
+  //    case x: IdentityOpenId =>
+  //      insertOpenIdIdentity(siteId, x)
+  //    case x: OpenAuthIdentity =>
+  //      insertOpenAuthIdentity(siteId, x)
+  //    case x =>
+  //      die("DwE8UYM0", s"Unknown identity type: ${classNameOf(x)}")
+  //  }
+  //}
 
 
-  private[rdb] def insertOpenIdIdentity(otherSiteId: SiteId, identity: IdentityOpenId) {
-    val details = identity.openIdDetails
-    runUpdate("""
-            insert into identities3(
-                ID, SITE_ID, USER_ID, USER_ID_ORIG, OID_CLAIMED_ID, OID_OP_LOCAL_ID,
-                OID_REALM, OID_ENDPOINT, OID_VERSION,
-                FIRST_NAME, EMAIL, COUNTRY)
-            values (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            List[AnyRef](identity.id.toInt.asAnyRef, otherSiteId.asAnyRef, identity.userId.asAnyRef,
-              identity.userId.asAnyRef,
-              details.oidClaimedId, e2d(details.oidOpLocalId), e2d(details.oidRealm),
-              e2d(details.oidEndpoint), e2d(details.oidVersion),
-              e2d(details.firstName), details.email.orNullVarchar, e2d(details.country.trim)))
-  }
+  // OID 1   OOLD rm
+  //private[rdb] def insertOpenIdIdentity(otherSiteId: SiteId, identity: IdentityOpenId) {
+  //  val details = identity.openIdDetails
+  //  runUpdate("""
+  //          insert into identities3(
+  //              ID, SITE_ID, USER_ID, USER_ID_ORIG, OID_CLAIMED_ID, OID_OP_LOCAL_ID,
+  //              OID_REALM, OID_ENDPOINT, OID_VERSION,
+  //              FIRST_NAME, EMAIL, COUNTRY)
+  //          values (
+  //              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+  //          List[AnyRef](identity.id.toInt.asAnyRef, otherSiteId.asAnyRef, identity.userId.asAnyRef,
+  //            identity.userId.asAnyRef,
+  //            details.oidClaimedId, e2d(details.oidOpLocalId), e2d(details.oidRealm),
+  //            e2d(details.oidEndpoint), e2d(details.oidVersion),
+  //            e2d(details.firstName), details.email.orNullVarchar, e2d(details.country.trim)))
+  //}
 
-
+  /*
   private[rdb] def _updateIdentity(identity: IdentityOpenId)
         (implicit connection: js.Connection) {
     val details = identity.openIdDetails
@@ -765,7 +766,7 @@ trait UserSiteDaoMixin extends SiteTransaction {
     })
   }
 
-
+  zzz
   def loadOpenIdIdentity(openIdDetails: OpenIdDetails): Option[IdentityOpenId] = {
     unimplemented("loadOpenIdIdentity", "TyE2WKBP40") /*
     Maybe reuse later on, if loading OpenId identities:
@@ -864,7 +865,7 @@ trait UserSiteDaoMixin extends SiteTransaction {
       }
     }
     identityInDb
-  }
+  }  */
 
 
   def loadUserByPrimaryEmailOrUsername(emailOrUsername: String): Option[User] = {
